@@ -1,0 +1,6 @@
+aiogram>=3.29,<4
+pyfragment>=2026.3
+python-dotenv>=1.0
+sqlalchemy>=2.0
+asyncpg>=0.30
+aiocryptopay>=0.4
