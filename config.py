@@ -53,10 +53,27 @@ except json.JSONDecodeError as exc:
 # --- Магазин ---
 SUPPORT_USERNAME: str = os.getenv("SUPPORT_USERNAME", "Night_supp")
 MIN_STARS: int = int(os.getenv("MIN_STARS", "50"))
-MAX_STARS: int = int(os.getenv("MAX_STARS", "1000000"))
+MAX_STARS: int = int(os.getenv("MAX_STARS", "1000"))
 
-# Начальная цена за 1 звезду в USDT (потом меняется из админки, хранится в БД)
-DEFAULT_PRICE_PER_STAR_USDT: float = float(os.getenv("DEFAULT_PRICE_PER_STAR_USDT", "0.015"))
+# Начальная цена за 1 звезду в рублях (потом меняется из админки, хранится в БД)
+DEFAULT_PRICE_PER_STAR_RUB: float = float(os.getenv("DEFAULT_PRICE_PER_STAR_RUB", "1.25"))
+
+# file_id стикера, который бот присылает по /start.
+# Как получить: перешли любой стикер боту @RawDataBot или @getidsbot — он покажет file_id в поле sticker.file_id.
+WELCOME_STICKER_ID: str | None = os.getenv("WELCOME_STICKER_ID") or None
 
 # Сколько минут ждать оплату инвойса, прежде чем считать его просроченным
 INVOICE_EXPIRES_MINUTES: int = int(os.getenv("INVOICE_EXPIRES_MINUTES", "20"))
+
+# Как часто (в секундах) фоновая задача проверяет неоплаченные инвойсы
+PAYMENT_POLL_INTERVAL_SECONDS: int = int(os.getenv("PAYMENT_POLL_INTERVAL_SECONDS", "7"))
+
+# Скрывать ли отправителя при покупке звёзд/Premium на Fragment (анонимная покупка)
+ANONYMOUS_PURCHASES: bool = os.getenv("ANONYMOUS_PURCHASES", "true").lower() == "true"
+
+# Комиссия CryptoBot, накидывается на сумму именно в момент создания счёта на оплату (в %)
+CRYPTOBOT_FEE_PERCENT: float = float(os.getenv("CRYPTOBOT_FEE_PERCENT", "3.1"))
+
+# Стартовые цены Premium по тарифам (в рублях), меняются из админки
+DEFAULT_PREMIUM_PRICES: dict[int, float] = {3: 1200.0, 6: 1300.0, 12: 2400.0}
+PREMIUM_MONTH_OPTIONS: list[int] = [3, 6, 12]
