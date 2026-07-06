@@ -1,5 +1,4 @@
 import asyncio
-import datetime as dt
 import logging
 from decimal import Decimal, InvalidOperation
 
@@ -12,7 +11,7 @@ from aiogram.types import CallbackQuery, Message
 import config
 import keyboards
 import texts
-from database import async_session, all_user_tg_ids, get_settings, stats_for_period
+from database import all_user_tg_ids, async_session, get_premium_prices, get_settings, recent_purchases, set_premium_prices
 
 logger = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -22,93 +21,154 @@ router.callback_query.filter(F.from_user.id.in_(config.ADMIN_IDS))
 
 
 class AdminStates(StatesGroup):
-    waiting_markup_value = State()
+    waiting_markup_stars_value = State()
+    waiting_markup_premium_value = State()
     waiting_broadcast_content = State()
     waiting_broadcast_confirm = State()
     waiting_after_purchase_text = State()
 
 
-def _since_for_period(period: str) -> dt.datetime | None:
-    now = dt.datetime.now(dt.timezone.utc)
-    if period == "day":
-        return now - dt.timedelta(days=1)
-    if period == "week":
-        return now - dt.timedelta(weeks=1)
-    if period == "month":
-        return now - dt.timedelta(days=30)
-    return None
-
-
-async def _render_stats(period: str) -> str:
-    since = _since_for_period(period)
-    async with async_session() as session:
-        stats = await stats_for_period(session, since)
-    return texts.admin_stats_block(
-        keyboards.PERIODS[period],
-        stats["new_users"],
-        stats["purchases_count"],
-        stats["stars_sum"],
-        stats["revenue_usdt"],
-    )
-
-
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, state: FSMContext) -> None:
     await state.clear()
-    text = texts.admin_menu_header() + "\n\n" + await _render_stats("all")
-    await message.answer(text, reply_markup=keyboards.admin_stats_periods("all"), parse_mode="HTML")
-
-
-@router.callback_query(F.data.startswith("admin_stats:"))
-async def admin_stats(callback: CallbackQuery) -> None:
-    period = callback.data.split(":", 1)[1]
-    text = texts.admin_menu_header() + "\n\n" + await _render_stats(period)
-    await callback.message.edit_text(text, reply_markup=keyboards.admin_stats_periods(period), parse_mode="HTML")
-    await callback.answer()
+    async with async_session() as session:
+        settings = await get_settings(session)
+    await message.answer(
+        texts.admin_menu_header(),
+        reply_markup=keyboards.admin_menu(settings.maintenance_mode),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data == "admin_back")
 async def admin_back(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    text = texts.admin_menu_header() + "\n\n" + await _render_stats("all")
-    await callback.message.edit_text(text, reply_markup=keyboards.admin_stats_periods("all"), parse_mode="HTML")
-    await callback.answer()
-
-
-# --- Наценки / цена ---
-
-
-@router.callback_query(F.data == "admin_markup")
-async def admin_markup(callback: CallbackQuery, state: FSMContext) -> None:
     async with async_session() as session:
         settings = await get_settings(session)
-    await state.set_state(AdminStates.waiting_markup_value)
     await callback.message.edit_text(
-        texts.markup_menu(float(settings.price_per_star_usdt)),
-        reply_markup=keyboards.admin_back(),
+        texts.admin_menu_header(),
+        reply_markup=keyboards.admin_menu(settings.maintenance_mode),
         parse_mode="HTML",
     )
     await callback.answer()
 
 
-@router.message(AdminStates.waiting_markup_value)
-async def set_markup(message: Message, state: FSMContext) -> None:
+@router.callback_query(F.data == "admin_stats")
+async def admin_stats(callback: CallbackQuery) -> None:
+    async with async_session() as session:
+        purchases = await recent_purchases(session, limit=20)
+
+    if not purchases:
+        text = texts.admin_stats_empty()
+    else:
+        entries = "\n\n".join(texts.admin_stats_entry(p) for p in purchases)
+        text = f"{texts.admin_menu_header()}\n\n" + entries
+
+    await callback.message.edit_text(text, reply_markup=keyboards.admin_back(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_toggle_maintenance")
+async def admin_toggle_maintenance(callback: CallbackQuery) -> None:
+    async with async_session() as session:
+        settings = await get_settings(session)
+        settings.maintenance_mode = not settings.maintenance_mode
+        await session.commit()
+        new_state = settings.maintenance_mode
+
+    await callback.message.edit_text(
+        texts.admin_menu_header(),
+        reply_markup=keyboards.admin_menu(new_state),
+        parse_mode="HTML",
+    )
+    await callback.answer(texts.maintenance_status(new_state))
+
+
+# --- Наценки: выбор товара ---
+
+
+@router.callback_query(F.data == "admin_markup")
+async def admin_markup_choice(callback: CallbackQuery) -> None:
+    await callback.message.edit_text(texts.markup_choice(), reply_markup=keyboards.markup_choice_kb(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "markup_stars")
+async def admin_markup_stars(callback: CallbackQuery, state: FSMContext) -> None:
+    async with async_session() as session:
+        settings = await get_settings(session)
+    await state.set_state(AdminStates.waiting_markup_stars_value)
+    await callback.message.edit_text(
+        texts.markup_menu(settings.price_per_star_rub), reply_markup=keyboards.admin_back(), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_markup_stars_value)
+async def set_markup_stars(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip().replace(",", ".")
     try:
         value = Decimal(raw)
         if value <= 0:
             raise InvalidOperation
     except InvalidOperation:
-        await message.answer("Нужно положительное число, например 0.016. Попробуй ещё раз.")
+        await message.reply("Нужно положительное число, например 1.3. Попробуйте ещё раз.")
         return
 
     async with async_session() as session:
         settings = await get_settings(session)
-        settings.price_per_star_usdt = value
+        settings.price_per_star_rub = value
         await session.commit()
 
     await state.clear()
-    await message.answer(f"✅ Новая цена: {value} USDT за звезду.")
+    await message.reply(f"✅ Новая цена: {value} ₽ за звезду.")
+
+
+@router.callback_query(F.data == "markup_premium")
+async def admin_markup_premium(callback: CallbackQuery) -> None:
+    await callback.message.edit_text(
+        texts.premium_markup_choice(), reply_markup=keyboards.premium_markup_months_kb(), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("markup_premium_month:"))
+async def admin_markup_premium_month(callback: CallbackQuery, state: FSMContext) -> None:
+    months = int(callback.data.split(":", 1)[1])
+    async with async_session() as session:
+        settings = await get_settings(session)
+    prices = get_premium_prices(settings)
+    await state.set_state(AdminStates.waiting_markup_premium_value)
+    await state.update_data(markup_premium_months=months)
+    await callback.message.edit_text(
+        texts.premium_markup_menu(months, prices.get(months, 0)),
+        reply_markup=keyboards.admin_back(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_markup_premium_value)
+async def set_markup_premium(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    months = data["markup_premium_months"]
+    raw = (message.text or "").strip().replace(",", ".")
+    try:
+        value = Decimal(raw)
+        if value <= 0:
+            raise InvalidOperation
+    except InvalidOperation:
+        await message.reply("Нужно положительное число, например 1200. Попробуйте ещё раз.")
+        return
+
+    async with async_session() as session:
+        settings = await get_settings(session)
+        prices = get_premium_prices(settings)
+        prices[months] = value
+        await set_premium_prices(session, settings, prices)
+
+    await state.clear()
+    await message.reply(f"✅ Новая цена Premium на {months} мес.: {value} ₽.")
 
 
 # --- Сообщение после покупки ---
@@ -134,7 +194,7 @@ async def set_after_purchase_text(message: Message, state: FSMContext) -> None:
         settings.message_after_purchase = new_text
         await session.commit()
     await state.clear()
-    await message.answer("✅ Сообщение после покупки обновлено.")
+    await message.reply("✅ Сообщение после покупки обновлено.")
 
 
 # --- Рассылка ---
@@ -156,7 +216,7 @@ async def broadcast_content(message: Message, state: FSMContext) -> None:
         recipients = await all_user_tg_ids(session)
     await state.update_data(recipients=recipients)
 
-    await message.answer(texts.broadcast_confirm(len(recipients)), reply_markup=keyboards.broadcast_confirm_kb())
+    await message.reply(texts.broadcast_confirm(len(recipients)), reply_markup=keyboards.broadcast_confirm_kb())
 
 
 @router.callback_query(AdminStates.waiting_broadcast_confirm, F.data == "broadcast_cancel")
