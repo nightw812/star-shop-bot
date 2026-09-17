@@ -75,12 +75,11 @@ def amount_select() -> InlineKeyboardMarkup:
 
 
 def payment_method() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="USDT • 3%", callback_data="pay_usdt")],
-            [BACK],
-        ]
-    )
+    rows = [[InlineKeyboardButton(text="USDT • 3%", callback_data="pay_usdt")]]
+    if config.LAVA_ENABLED:
+        rows.append([InlineKeyboardButton(text="СБП (карта/QR)", callback_data="pay_sbp")])
+    rows.append([BACK])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def markup_choice_kb() -> InlineKeyboardMarkup:
