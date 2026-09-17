@@ -77,3 +77,13 @@ CRYPTOBOT_FEE_PERCENT: float = float(os.getenv("CRYPTOBOT_FEE_PERCENT", "3.1"))
 # Стартовые цены Premium по тарифам (в рублях), меняются из админки
 DEFAULT_PREMIUM_PRICES: dict[int, float] = {3: 1200.0, 6: 1300.0, 12: 2400.0}
 PREMIUM_MONTH_OPTIONS: list[int] = [3, 6, 12]
+
+# --- LAVA BUSINESS (приём оплаты через СБП) ---
+# Shop ID и секретный ключ — в личном кабинете dev.lava.ru
+LAVA_SHOP_ID: str = os.getenv("LAVA_SHOP_ID", "")
+LAVA_SECRET_KEY: str = os.getenv("LAVA_SECRET_KEY", "")
+LAVA_BASE_URL: str = os.getenv("LAVA_BASE_URL", "https://api.lava.ru/business")
+
+# Кнопка "СБП" появляется сама, как только заданы LAVA_SHOP_ID и LAVA_SECRET_KEY.
+# Поставь LAVA_ENABLED=false в .env, если нужно временно скрыть способ оплаты без удаления ключей.
+LAVA_ENABLED: bool = bool(LAVA_SHOP_ID and LAVA_SECRET_KEY) and os.getenv("LAVA_ENABLED", "true").lower() != "false"
