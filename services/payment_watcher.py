@@ -14,7 +14,7 @@ from database import (
     get_settings,
     mark_purchase,
 )
-from services import cryptopay_service, fragment_service
+from services import cryptopay_service, fragment_service, lava_service
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,10 @@ async def poll_payments(bot: Bot) -> None:
 
             for purchase in pending:
                 try:
-                    status = await cryptopay_service.get_invoice_status(purchase.invoice_id)
+                    if purchase.payment_provider == "lava":
+                        status = await lava_service.get_invoice_status(purchase.invoice_id)
+                    else:
+                        status = await cryptopay_service.get_invoice_status(int(purchase.invoice_id))
                 except Exception:
                     logger.exception("Не удалось получить статус инвойса %s", purchase.invoice_id)
                     continue
