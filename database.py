@@ -33,7 +33,10 @@ class Purchase(Base):
     recipient_username: Mapped[str] = mapped_column(String(64))
     stars_amount: Mapped[int] = mapped_column()  # для premium — количество месяцев
     price_rub: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    invoice_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    # Строка, а не число — у CryptoBot ID числовой, у Lava это строковый orderId
+    invoice_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # cryptobot | lava — какой сервис принял оплату, нужно фоновому опросчику статуса
+    payment_provider: Mapped[str] = mapped_column(String(16), default="cryptobot")
     # pending | paid | delivered | failed | expired
     status: Mapped[str] = mapped_column(String(16), default="pending")
     fragment_transaction_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -120,7 +123,8 @@ async def create_purchase(
     recipient_username: str,
     stars_amount: int,
     price_rub: Decimal,
-    invoice_id: int,
+    invoice_id: str,
+    payment_provider: str = "cryptobot",
 ) -> Purchase:
     purchase = Purchase(
         user_tg_id=user_tg_id,
@@ -130,7 +134,8 @@ async def create_purchase(
         recipient_username=recipient_username,
         stars_amount=stars_amount,
         price_rub=price_rub,
-        invoice_id=invoice_id,
+        invoice_id=str(invoice_id),
+        payment_provider=payment_provider,
         status="pending",
     )
     session.add(purchase)
@@ -163,8 +168,8 @@ async def mark_purchase(
     await session.commit()
 
 
-async def get_purchase_by_invoice(session: AsyncSession, invoice_id: int) -> Purchase | None:
-    result = await session.execute(select(Purchase).where(Purchase.invoice_id == invoice_id))
+async def get_purchase_by_invoice(session: AsyncSession, invoice_id: str) -> Purchase | None:
+    result = await session.execute(select(Purchase).where(Purchase.invoice_id == str(invoice_id)))
     return result.scalar_one_or_none()
 
 
