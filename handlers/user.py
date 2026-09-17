@@ -1,5 +1,6 @@
 import logging
 import re
+import uuid
 from decimal import Decimal
 from typing import Any
 
@@ -21,7 +22,7 @@ from database import (
     get_user_by_tg_id,
     user_profile_stats,
 )
-from services import cryptopay_service, fragment_service
+from services import cryptopay_service, fragment_service, lava_service
 
 logger = logging.getLogger(__name__)
 router = Router(name="user")
@@ -29,7 +30,7 @@ router = Router(name="user")
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{5,32}$")
 
 # Грубый курс для отображения "≈ $" в профиле (просто ориентир, не влияет на расчёты оплаты)
-_RUB_PER_USD = 90
+_RUB_PER_USD = 80
 
 
 class Flow(StatesGroup):
@@ -332,7 +333,8 @@ async def pay_usdt(callback: CallbackQuery, state: FSMContext) -> None:
             recipient_username=username,
             stars_amount=amount,
             price_rub=total_with_fee,
-            invoice_id=invoice.invoice_id,
+            invoice_id=str(invoice.invoice_id),
+            payment_provider="cryptobot",
         )
 
     invoice_text = (
@@ -343,6 +345,57 @@ async def pay_usdt(callback: CallbackQuery, state: FSMContext) -> None:
 
     await _delete_previous(callback, ctx)
     new_id = await _send(callback, invoice_text, keyboards.pay_invoice(invoice.bot_invoice_url))
+    stack = ctx.get("nav_stack", [])
+    stack.append(ctx.get("screen", "main"))
+    await state.update_data(screen="invoice", last_bot_msg_id=new_id, nav_stack=stack)
+
+
+@router.callback_query(F.data == "pay_sbp")
+async def pay_sbp(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    ctx = await state.get_data()
+    username = ctx["username"]
+    amount = ctx["amount"]  # звёзды или месяцы Premium, в зависимости от product
+    product = ctx.get("product", "stars")
+    total_rub = Decimal(ctx["base_total_rub"])
+
+    # Свой order_id генерируем сами — Lava потом опрашивается именно по нему (не по её internal id)
+    order_id = f"{callback.from_user.id}-{uuid.uuid4().hex[:12]}"
+    comment = (
+        f"{amount} Telegram Stars для @{username}" if product == "stars" else f"Premium {amount} мес. для @{username}"
+    )
+
+    try:
+        invoice = await lava_service.create_invoice(order_id=order_id, amount_rub=total_rub, comment=comment)
+    except lava_service.LavaError as exc:
+        logger.warning("Не удалось создать счёт LAVA: %s", exc)
+        await callback.message.answer(
+            f"⚠️ Не удалось создать счёт СБП: {exc}\nПопробуй оплатить через USDT.",
+        )
+        return
+
+    async with async_session() as session:
+        await create_purchase(
+            session,
+            user_tg_id=callback.from_user.id,
+            buyer_username=callback.from_user.username,
+            purchase_type=ctx.get("purchase_type", "gift"),
+            product=product,
+            recipient_username=username,
+            stars_amount=amount,
+            price_rub=total_rub,
+            invoice_id=order_id,
+            payment_provider="lava",
+        )
+
+    invoice_text = (
+        texts.invoice_message(username, amount, int(total_rub))
+        if product == "stars"
+        else texts.premium_invoice_message(username, amount, int(total_rub))
+    )
+
+    await _delete_previous(callback, ctx)
+    new_id = await _send(callback, invoice_text, keyboards.pay_invoice(invoice["url"]))
     stack = ctx.get("nav_stack", [])
     stack.append(ctx.get("screen", "main"))
     await state.update_data(screen="invoice", last_bot_msg_id=new_id, nav_stack=stack)
